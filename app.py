@@ -2690,9 +2690,12 @@ def _silent_upgrade_worker():
         _SILENT_UPGRADE_LOCK.release()
 
 
-def _check_update_sync(force: bool = False, _auto_upgrade: bool = True) -> dict:
+def _check_update_sync(force: bool = False, _auto_upgrade: bool = False) -> dict:
     """检测 GitHub 官方仓库 (czg86389-hub/muse2api) 是否有新版本或新提交。
-    发现更新时在后台静默自动拉取升级，不触发前端弹窗或横幅通知。"""
+
+    部署固定从 fork 的 feat/chat-image-input 分支运行，因此默认只检测、不自动
+    拉取升级；只有显式调用升级接口时才执行重置，避免后台检查覆盖部署分支。
+    """
     now = time.time()
     if not force and _UPDATE_CACHE["data"] and (now - _UPDATE_CACHE["ts"]) < 90:
         return _UPDATE_CACHE["data"]
