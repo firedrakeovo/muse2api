@@ -82,6 +82,26 @@ except app.HTTPException as exc:
 else:
     raise AssertionError("text payload was accepted as a chat image")
 
+# MUSE2API_CHAT_IMAGE_INPUT=0 must ignore images without downloading/validating.
+inline = app.ChatMessage(role="user", content=[
+    {"type": "text", "text": "看图"},
+    {"type": "image_url", "image_url": {"url": PNG_1PX}},
+])
+old_switch = app.CFG.chat_image_input
+try:
+    app.CFG.chat_image_input = False
+    check(app._chat_images_for_request([bad]) == [],
+          "disabled switch still validated a malformed image")
+    check(app._chat_images_for_request([inline]) == [],
+          "disabled switch still prepared an image")
+    app.CFG.chat_image_input = True
+    prepared_switch = app._chat_images_for_request([inline])
+    check(len(prepared_switch) == 1 and
+          prepared_switch[0].startswith("data:image/png;base64,"),
+          prepared_switch[:1])
+finally:
+    app.CFG.chat_image_input = old_switch
+
 # Responses top-level input_image is normalized into a user message.
 req = app.ResponsesRequest(input=[{
     "type": "input_image", "image_url": "https://example.com/responses.png"}])

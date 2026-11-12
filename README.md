@@ -248,7 +248,7 @@ curl -X POST "http://localhost:18610/v1/chat/completions" \
   }'
 ```
 
-`muse-spark` 也支持 OpenAI 多模态 `image_url` 输入（最多 10 张，单张 ≤40 MiB、合计 ≤100 MiB；支持公网 URL、Data URL 或裸 Base64）。图片会在发送前附加到 Muse 聊天输入框，模型可以看图回答；图片输出仍请使用 `muse-image` 的生图接口。
+`muse-spark` 也支持 OpenAI 多模态 `image_url` 输入（最多 10 张，单张 ≤40 MiB、合计 ≤100 MiB；支持公网 URL、Data URL 或裸 Base64）。图片会在发送前附加到 Muse 聊天输入框，模型可以看图回答；图片输出仍请使用 `muse-image` 的生图接口。若不需要图片输入，可在 `.env` 设 `MUSE2API_CHAT_IMAGE_INPUT=0` 关闭，关闭后图片只保留 `[图片]` 文本占位，不下载、不上传。
 
 ```bash
 curl -X POST "http://localhost:18610/v1/chat/completions" \
@@ -416,6 +416,7 @@ Nginx 反代需把 `client_max_body_size` 调到 200M 左右，否则大素材�
 | `MUSE2API_CHROMIUM` | `chromium` | 浏览器可执行程序完整路径 |
 | `MUSE2API_CDP_PORT` | `19210` | 内部 CDP 调试通信端口 |
 | `MUSE2API_CONCURRENCY` | `2` | 最大并发生成任务数（支持随服务器资源自由调高，默认 2） |
+| `MUSE2API_CHAT_IMAGE_INPUT` | `1` | 是否启用 chat 图片输入；`0` 关闭时 `image_url`/`input_image` 仅作为 `[图片]` 文本占位，不下载、不上传 |
 | `MUSE2API_IMAGE_TIMEOUT` | `240` | 生图超时上限（秒） |
 | `MUSE2API_VIDEO_TIMEOUT` | `600` | 生视频超时上限（秒） |
 | `MUSE2API_CHAT_TIMEOUT` | `300` | 对话生成超时上限（秒） |

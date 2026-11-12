@@ -810,6 +810,17 @@ def _prepare_chat_images(refs: list[str]) -> list[str]:
     return prepared
 
 
+def _chat_images_for_request(messages: list[ChatMessage]) -> list[str]:
+    """按 MUSE2API_CHAT_IMAGE_INPUT 决定是否处理对话图片。
+
+    关闭时直接返回空列表，保留 build_chat_prompt 生成的 "[图片]" 文本占位，
+    不触发下载、校验或浏览器上传，行为与纯文本版本一致。
+    """
+    if not CFG.chat_image_input:
+        return []
+    return _prepare_chat_images(_chat_image_sources(messages))
+
+
 def build_chat_prompt(messages: list[ChatMessage]) -> str:
     """把 messages 拼成发给 muse.ai 的一段提示词。
 
@@ -1619,7 +1630,7 @@ async def chat_completions(req: ChatRequest, _=Depends(auth)):
     if not prompt:
         raise HTTPException(400, "messages 为空")
 
-    prepared_chat_images = _prepare_chat_images(_chat_image_sources(req.messages))
+    prepared_chat_images = _chat_images_for_request(req.messages)
     if prepared_chat_images:
         prompt = (f"（用户本次消息附带了 {len(prepared_chat_images)} 张图片，"
                   "请结合图片内容回答。）\n\n" + prompt)
@@ -1801,7 +1812,7 @@ async def responses_api(req: ResponsesRequest, _=Depends(auth)):
     if not prompt:
         raise HTTPException(400, "input 为空")
 
-    prepared_resp_images = _prepare_chat_images(_chat_image_sources(msgs))
+    prepared_resp_images = _chat_images_for_request(msgs)
     if prepared_resp_images:
         prompt = (f"（用户本次消息附带了 {len(prepared_resp_images)} 张图片，"
                   "请结合图片内容回答。）\n\n" + prompt)

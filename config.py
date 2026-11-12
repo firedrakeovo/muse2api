@@ -104,6 +104,12 @@ class Config:
     chat_timeout: int = field(default_factory=lambda: int(_env("MUSE2API_CHAT_TIMEOUT", "300")))
     max_concurrency: int = field(default_factory=lambda: max(1, int(_env("MUSE2API_CONCURRENCY", "8"))))
 
+    # 对话图片输入开关。默认启用：请求里的 image_url/input_image 会被真正附加到
+    # Muse 聊天输入框。设为 0 时只保留 "[图片]" 文本占位，不下载、不上传，等价于
+    # 纯文本聊天；用于上游页面结构变化或不想启用视觉输入时快速回退。
+    chat_image_input: bool = field(
+        default_factory=lambda: _env("MUSE2API_CHAT_IMAGE_INPUT", "1").strip() != "0")
+
     # 参考图输入默认只允许调用方直接提供数据和公网 URL。
     # 仅可信单用户部署可显式设为 1 恢复服务器本地文件或私网抓取。
     ref_image_local_files: bool = field(
