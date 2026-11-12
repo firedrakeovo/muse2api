@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/License-MIT-orange" alt="License" />
 </p>
 
-将 **[muse.ai](https://muse.ai/)** 网页端的前沿多模态能力逆向工程封装为标准的 **OpenAI 兼容 RESTful API**。通过无头浏览器 CDP 协议穿透、热备 WebSocket 隧道复用与动态 Session 管理，原生支持文本对话（2~3 秒级流式首字响应）、文生图、图生图编辑、文生视频、首帧图生视频，并提供多账号池亲和轮转、全自动 48 小时会话续期与云端 VM 唤醒保活，以及配套 Chrome 一键导号扩展。
+将 **[muse.ai](https://muse.ai/)** 网页端的前沿多模态能力逆向工程封装为标准的 **OpenAI 兼容 RESTful API**。通过无头浏览器 CDP 协议穿透、热备 WebSocket 隧道复用与动态 Session 管理，原生支持文本/图片对话（2~3 秒级流式首字响应）、文生图、图生图编辑、文生视频、首帧图生视频，并提供多账号池亲和轮转、全自动 48 小时会话续期与云端 VM 唤醒保活，以及配套 Chrome 一键导号扩展。
 
 ---
 
@@ -244,6 +244,25 @@ curl -X POST "http://localhost:18610/v1/chat/completions" \
     "messages": [
       {"role": "user", "content": "写一首关于赛博朋克与霓虹夜雨的七言绝句"}
     ],
+    "stream": false
+  }'
+```
+
+`muse-spark` 也支持 OpenAI 多模态 `image_url` 输入（最多 10 张，单张 ≤40 MiB、合计 ≤100 MiB；支持公网 URL、Data URL 或裸 Base64）。图片会在发送前附加到 Muse 聊天输入框，模型可以看图回答；图片输出仍请使用 `muse-image` 的生图接口。
+
+```bash
+curl -X POST "http://localhost:18610/v1/chat/completions" \
+  -H "Authorization: Bearer m2a_your_secret_key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "muse-spark",
+    "messages": [{
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "这张图里是什么颜色？只回答颜色"},
+        {"type": "image_url", "image_url": {"url": "https://example.com/red-square.png"}}
+      ]
+    }],
     "stream": false
   }'
 ```

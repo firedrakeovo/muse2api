@@ -1498,11 +1498,24 @@ class MuseEngine:
 
     def chat_stream(self, cookies: dict, prompt: str, expires: dict | None = None,
                     timeout: int | None = None, account_id: str | None = None,
-                    stop_event=None):
-        """发一条消息，流式 yield 增量文本。"""
+                    stop_event=None, images: list[str] | None = None):
+        """发一条消息，流式 yield 增量文本。
+
+        images 为 data URL 列表；发送前附加到聊天输入框，回复结束后清理临时文件。
+        """
         timeout = int(timeout or getattr(self.cfg, "chat_timeout", 300))
         self.ensure_page(cookies, expires, account_id=account_id)
         self.reset_thread(for_chat=True)
+        upload = self._attach_images(images) if images else None
+        if not images:
+            self._clear_attachments()
+        try:
+            yield from self._chat_stream_after_send(prompt, timeout, stop_event)
+        finally:
+            if upload:
+                shutil.rmtree(upload["dir"], ignore_errors=True)
+
+    def _chat_stream_after_send(self, prompt: str, timeout: int, stop_event=None):
         base_agent, base_text, _ = self._poll_chat()
         self._send(prompt)
 
@@ -1566,10 +1579,12 @@ class MuseEngine:
         raise MuseGenerationError("等待助手回复超时")
 
     def chat(self, cookies: dict, prompt: str, expires: dict | None = None,
-             timeout: int | None = None, account_id: str | None = None) -> str:
+             timeout: int | None = None, account_id: str | None = None,
+             images: list[str] | None = None) -> str:
         """发一条消息，返回完整回复文本（非流式）。"""
         out = ""
-        for chunk in self.chat_stream(cookies, prompt, expires, timeout, account_id=account_id):
+        for chunk in self.chat_stream(cookies, prompt, expires, timeout,
+                                      account_id=account_id, images=images):
             out += chunk
         return out
 

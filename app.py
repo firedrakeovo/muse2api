@@ -271,7 +271,7 @@ async def _validation_exc(request: Request, exc: RequestValidationError):
 
 MODELS = [
     {"id": "muse-spark", "object": "model", "owned_by": "muse",
-     "description": "Muse Spark —— 文本 / 代码对话（网页免费额度，支持流式）"},
+     "description": "Muse Spark —— 文本 / 代码对话，支持图片输入（网页免费额度，支持流式）"},
     {"id": "muse-image", "object": "model", "owned_by": "muse",
      "description": "Muse Image —— 文生图 / 图像编辑（网页免费额度）"},
     {"id": "muse-video", "object": "model", "owned_by": "muse",
@@ -367,7 +367,8 @@ def _renew_and_persist(acc_id: str, wake_vm: bool = True, force: bool = False) -
 
 
 def safe_chat_stream(cookies: dict, prompt: str, expires: dict | None,
-                     timeout: int, account_id: str | None):
+                     timeout: int, account_id: str | None,
+                     images: list[str] | None = None):
     """在独立线程中执行 chat_stream 并持有 GEN_LOCK，通过 Queue 往外吐。
     无论下游客户端何时断连、异常或超时，stop_event + finally 块保证 100% 立即释放 GEN_LOCK，绝不死锁。
     若首字前遇到单账号 VM 卡死或会话异常，自动切换下一个健康账号重试一次。"""
@@ -420,7 +421,8 @@ def safe_chat_stream(cookies: dict, prompt: str, expires: dict | None,
                         engine.start()
                         for chunk in engine.chat_stream(
                             cur_cookies, prompt, cur_exp, timeout,
-                            account_id=cur_id, stop_event=stop_event
+                            account_id=cur_id, stop_event=stop_event,
+                            images=images
                         ):
                             yielded = True
                             q.put(("data", chunk))
@@ -757,12 +759,55 @@ def _content_text(content) -> str:
                 t = item.get("type")
                 if t in (None, "text", "input_text", "output_text"):
                     parts.append(str(item.get("text") or ""))
-                elif t == "image_url":
+                elif t in ("image_url", "input_image", "image"):
                     parts.append("[图片]")
             elif isinstance(item, str):
                 parts.append(item)
         return "\n".join(p for p in parts if p)
     return str(content)
+
+
+def _chat_image_sources(messages: list[ChatMessage]) -> list[str]:
+    """从 Chat/Responses 消息里收集用户图片输入（保持顺序）。
+
+    兼容 Chat Completions 的 image_url 与 Responses 的 input_image。
+    图片会在请求入口下载/校验，然后随本轮 prompt 一起附加到 Muse 聊天输入框。
+    """
+    refs: list[str] = []
+    for mi, m in enumerate(messages):
+        role = (m.role or "").strip().lower()
+        if role not in ("user", "developer"):
+            continue
+        content = m.content
+        if not isinstance(content, list):
+            continue
+        for ci, item in enumerate(content):
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") not in ("image_url", "input_image", "image"):
+                continue
+            ref = _image_value(item)
+            if not ref:
+                raise HTTPException(
+                    400, f"messages[{mi}].content[{ci}] 图片引用无效")
+            refs.append(ref)
+    if len(refs) > MAX_REFERENCE_IMAGES:
+        raise HTTPException(
+            400, f"对话图片最多 {MAX_REFERENCE_IMAGES} 张（当前 {len(refs)} 张）")
+    return refs
+
+
+def _prepare_chat_images(refs: list[str]) -> list[str]:
+    """下载并校验对话图片，统一转成 data URL；只接受图片类型。"""
+    if not refs:
+        return []
+    prepared = _prepare_reference_images(refs)
+    for index, ref in enumerate(prepared):
+        mime = ref[5:].split(";", 1)[0].strip().lower()
+        if not mime.startswith("image/"):
+            raise HTTPException(
+                400, f"对话图片[{index}] 不是图片（{mime or 'unknown'}）")
+    return prepared
 
 
 def build_chat_prompt(messages: list[ChatMessage]) -> str:
@@ -1574,6 +1619,11 @@ async def chat_completions(req: ChatRequest, _=Depends(auth)):
     if not prompt:
         raise HTTPException(400, "messages 为空")
 
+    prepared_chat_images = _prepare_chat_images(_chat_image_sources(req.messages))
+    if prepared_chat_images:
+        prompt = (f"（用户本次消息附带了 {len(prepared_chat_images)} 张图片，"
+                  "请结合图片内容回答。）\n\n" + prompt)
+
     # 工具调用协议默认不注入 —— 实测 muse.ai 的助手会明确拒绝输出"伪工具调用"，
     # 注入反而污染正常回答；详见 config.py 的 tool_protocol 注释。
     tool_note = build_tools_prompt(req.tools) if CFG.tool_protocol else ""
@@ -1609,7 +1659,9 @@ async def chat_completions(req: ChatRequest, _=Depends(auth)):
                 # 握手建立瞬间立即发送 role: assistant 首包，让下游客户端秒级捕获光标
                 yield _sse(_chat_chunk(cid, created, model, {"role": "assistant"}))
 
-                stream_gen = safe_chat_stream(cookies, prompt, expires, timeout, account_id=acc_id)
+                stream_gen = safe_chat_stream(
+                    cookies, prompt, expires, timeout, account_id=acc_id,
+                    images=prepared_chat_images)
                 if not tool_note:
                     for chunk in stream_gen:
                         for piece in _pace_text(chunk):
@@ -1671,7 +1723,9 @@ async def chat_completions(req: ChatRequest, _=Depends(auth)):
         return StreamingResponse(sync_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
     def run() -> str:
-        return "".join(safe_chat_stream(cookies, prompt, expires, timeout, account_id=acc_id))
+        return "".join(safe_chat_stream(
+            cookies, prompt, expires, timeout, account_id=acc_id,
+            images=prepared_chat_images))
 
     try:
         text = await asyncio.to_thread(run)
@@ -1720,6 +1774,8 @@ def _responses_messages(req: ResponsesRequest) -> list[ChatMessage]:
                                         content=item.get("content")))
             elif itype == "input_text":
                 msgs.append(ChatMessage(role="user", content=item.get("text")))
+            elif itype == "input_image":
+                msgs.append(ChatMessage(role="user", content=[item]))
             elif itype == "function_call_output":
                 msgs.append(ChatMessage(role="user", content="【工具执行结果】\n"
                                         + str(item.get("output") or "")))
@@ -1740,9 +1796,15 @@ async def responses_api(req: ResponsesRequest, _=Depends(auth)):
     只实现 Codex 实际用到的子集：文本进 → 文本出（含流式事件）。
     muse.ai 不会返回结构化的 tool_calls，关于工具调用的边界见 README。
     """
-    prompt = build_chat_prompt(_responses_messages(req))
+    msgs = _responses_messages(req)
+    prompt = build_chat_prompt(msgs)
     if not prompt:
         raise HTTPException(400, "input 为空")
+
+    prepared_resp_images = _prepare_chat_images(_chat_image_sources(msgs))
+    if prepared_resp_images:
+        prompt = (f"（用户本次消息附带了 {len(prepared_resp_images)} 张图片，"
+                  "请结合图片内容回答。）\n\n" + prompt)
 
     model = resolve_model(req.model, default="muse-spark")
     timeout = int(req.timeout or CFG.chat_timeout)
@@ -1782,7 +1844,9 @@ async def responses_api(req: ResponsesRequest, _=Depends(auth)):
                     "part": {"type": "output_text", "text": "",
                              "annotations": []}})
                 full = ""
-                for chunk in safe_chat_stream(cookies, prompt, expires, timeout, account_id=acc_id):
+                for chunk in safe_chat_stream(
+                        cookies, prompt, expires, timeout, account_id=acc_id,
+                        images=prepared_resp_images):
                     full += chunk
                     yield _sse_event("response.output_text.delta", {
                         "type": "response.output_text.delta", "item_id": mid,
@@ -1807,7 +1871,9 @@ async def responses_api(req: ResponsesRequest, _=Depends(auth)):
         return StreamingResponse(sync_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
     def run() -> str:
-        return "".join(safe_chat_stream(cookies, prompt, expires, timeout, account_id=acc_id))
+        return "".join(safe_chat_stream(
+            cookies, prompt, expires, timeout, account_id=acc_id,
+            images=prepared_resp_images))
 
     try:
         text = await asyncio.to_thread(run)
