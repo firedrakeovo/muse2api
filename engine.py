@@ -701,13 +701,17 @@ class MuseEngine:
             time.sleep(0.1)
         return False
 
-    def reset_thread(self, for_chat: bool = False):
+    def reset_thread(self, for_chat: bool = False,
+                     force_new_thread: bool = False):
         """关闭残留弹窗并确保处于干净会话且 WebSocket 已就绪。
-        对于纯文本对话（for_chat=True），若当前热页面无附件、无卡死且气泡数较少，直接复用现有热连接以实现 2s 级秒回。"""
+
+        对于纯文本对话，页面可复用；Plan A 在复用热页时强制开一个新 thread，
+        避免 AstrBot 全量历史与 Muse 页面历史重复，同时保留 browser context。
+        """
         if not self.page:
             return
         try:
-            needs_nav = self.page.js("""(function(forChat){
+            needs_nav = self.page.js("""(function(forChat, forceNewThread){
                 var d = document.querySelector('[role="dialog"]');
                 if (d) {
                     var b = d.querySelector('button[aria-label*="close" i], button');
@@ -722,11 +726,16 @@ class MuseEngine:
                 var bodyTxt = document.body ? (document.body.innerText || '') : '';
                 var hasStuck = bodyTxt.indexOf('Still sending') !== -1 || bodyTxt.indexOf('Connecting...') !== -1;
                 if (hasStop || hasStuck || hasAtts) return true;
+                if (forceNewThread) {
+                    var onNew = window.location.pathname === '/thread/new';
+                    if (!onNew || bubbleCount > 0) return true;
+                }
                 if (forChat) {
                     return bubbleCount >= 24;
                 }
                 return (window.location.pathname !== '/thread/new') || bubbleCount > 0;
-            })(%s)""" % ("true" if for_chat else "false"))
+            })(%s, %s)""" % ("true" if for_chat else "false",
+                             "true" if force_new_thread else "false"))
             if needs_nav:
                 self.page.send("Page.navigate", {"url": "https://muse.ai/thread/new"})
                 t_end = time.time() + 10.0
@@ -1504,8 +1513,12 @@ class MuseEngine:
         images 为 data URL 列表；发送前附加到聊天输入框，回复结束后清理临时文件。
         """
         timeout = int(timeout or getattr(self.cfg, "chat_timeout", 300))
+        page_before = self.page
         self.ensure_page(cookies, expires, account_id=account_id)
-        self.reset_thread(for_chat=True)
+        reused_page = page_before is not None and self.page is page_before
+        # Plan A: keep the browser context/page warm, but never reuse the Muse
+        # thread when the request contains full history (AstrBot pattern).
+        self.reset_thread(for_chat=True, force_new_thread=reused_page)
         upload = self._attach_images(images) if images else None
         if not images:
             self._clear_attachments()

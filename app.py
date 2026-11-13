@@ -382,6 +382,7 @@ def safe_chat_stream(cookies: dict, prompt: str, expires: dict | None,
         cur_exp = expires
         last_exc = None
         leased_id = None
+        succeeded = False
         try:
             for attempt in range(2):
                 if stop_event.is_set():
@@ -431,6 +432,7 @@ def safe_chat_stream(cookies: dict, prompt: str, expires: dict | None,
                     if cur_id:
                         store.mark(cur_id, True, "")
                         _sync_cookies(cur_id)
+                    succeeded = True
                     return
                 except MuseAuthError as exc:
                     last_exc = exc
@@ -452,7 +454,10 @@ def safe_chat_stream(cookies: dict, prompt: str, expires: dict | None,
         finally:
             if leased_id:
                 ACCOUNT_POOL.release(leased_id)
-            engine.close_current_page()
+            # On success keep the warm browser context/page for the next call.
+            # The next chat request opens a fresh thread inside that same page.
+            if not succeeded or stop_event.is_set():
+                engine.close_current_page()
             _clear_account_proxy()
             q.put(("done", None))
 
